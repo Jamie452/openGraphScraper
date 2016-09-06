@@ -1,8 +1,5 @@
 var request = require('request'),
 	cheerio = require('cheerio'),
-	charset = require('charset'),
-	iconv = require('iconv-lite'),
-	url = require('url'),
 	_ = require('lodash');
 
 module.exports = function (options, callback) {
@@ -305,18 +302,21 @@ exports.info = function (options, callback) {
 	var that = this;
 	return new Promise(function (complete, reject) {
 		var hasCallback = typeof callback === 'function';
-		var done = function (error, info, source) {
+		var done = function (error, info) {
 			if (error) {
 				if (hasCallback) {
 					callback(error, info);
 				}
 				return reject(error, info);
 			}
+
 			if (hasCallback) {
-				callback(error, info, source);
+				callback(error, info);
 			}
-			return complete(info, source);
+
+			return complete(info);
 		};
+
 		that.getInfo(options, done);
 	});
 };
@@ -334,15 +334,11 @@ exports.getInfo = function (options, callback) {
 		if (inputUrl) {
 			options.url = inputUrl;
 			options.timeout = inputTimeout;
-			options.headers = Object.assign({
+			options.headers = {
 				'user-agent': 'request.js'
-			}, options.headers);
+			};
 			options.gzip = true;
-			if (process.browser) {
-				options.gzip = false;
-				options.protocol = url.parse(options.url).protocol;
-			}
-			that.getOG(options, function (err, results, source) {
+			that.getOG(options, function (err, results) {
 				if (results) {
 					returnResult = {
 						data: results,
@@ -369,7 +365,7 @@ exports.getInfo = function (options, callback) {
 						};
 					}
 				}
-				callback(error, returnResult, source);
+				callback(error, returnResult);
 			});
 		} else {
 			callback(true, {
@@ -424,154 +420,142 @@ exports.validateTimeout = function (inputTimeout) {
 	return true;
 };
 
+exports.processBody = function (options, body) {
+	var $ = cheerio.load(body),
+		meta = $('meta'),
+		keys = Object.keys(meta),
+		ogObject = {};
+
+	keys.forEach(function (key) {
+		if (!(meta[key].attribs && (meta[key].attribs.property || meta[key].attribs.name))) {
+			return;
+		}
+		var property = meta[key].attribs.property || meta[key].attribs.name,
+			content = meta[key].attribs.content;
+		fieldsArray.forEach(function (item) {
+			if (property === item.property) {
+				if (!item.multiple) {
+					ogObject[item.fieldName] = content;
+				} else if (!ogObject[item.fieldName]) {
+					ogObject[item.fieldName] = [content];
+				} else if (Array.isArray(ogObject[item.fieldName])) {
+					ogObject[item.fieldName].push(content);
+				}
+			}
+		});
+	});
+
+	/* Combine image/width/height/type
+	 and sort for priority */
+	var ogImages = _.zip(ogObject.ogImage,
+		ogObject.ogImageWidth,
+		ogObject.ogImageHeight,
+		ogObject.ogImageType)
+		.map(mediaMapper).sort(mediaSorter);
+
+	/* Combine video/width/height/type
+	 and sort for priority */
+	var ogVideos = _.zip(ogObject.ogVideo,
+		ogObject.ogVideoWidth,
+		ogObject.ogVideoHeight,
+		ogObject.ogVideoType)
+		.map(mediaMapper).sort(mediaSorter);
+
+	/* Combine twitter image/width/height/alt
+	 and sort for priority */
+	var twitterImages = _.zip(ogObject.twitterImage,
+		ogObject.twitterImageWidth,
+		ogObject.twitterImageHeight,
+		ogObject.twitterImageAlt)
+		.map(mediaMapperTwitterImage).sort(mediaSorter);
+
+	/* Combine twitter player/width/height/stream
+	 and sort for priority */
+	var twitterPlayers = _.zip(ogObject.twitterPlayer,
+		ogObject.twitterPlayerWidth,
+		ogObject.twitterPlayerHeight,
+		ogObject.twitterPlayerStream)
+		.map(mediaMapperTwitterPlayer).sort(mediaSorter);
+
+	// Delete temporary fields
+	fieldsArray.filter(function (item) {
+		return item.multiple;
+	}).forEach(function (item) {
+		delete ogObject[item.fieldName];
+	});
+
+	// Select the best image
+	if (ogImages.length) {
+		if (options.allMedia) {
+			ogObject.ogImage = ogImages;
+		} else {
+			ogObject.ogImage = ogImages[0];
+		}
+	}
+
+	// Select the best video
+	if (ogVideos.length) {
+		if (options.allMedia) {
+			ogObject.ogVideo = ogVideos;
+		} else {
+			ogObject.ogVideo = ogVideos[0];
+		}
+	}
+
+	// Select the best twitter image
+	if (twitterImages.length) {
+		if (options.allMedia) {
+			ogObject.twitterImage = twitterImages;
+		} else {
+			ogObject.twitterImage = twitterImages[0];
+		}
+	}
+
+	// Select the best player
+	if (twitterPlayers.length) {
+		if (options.allMedia) {
+			ogObject.twitterPlayer = twitterPlayers;
+		} else {
+			ogObject.twitterPlayer = twitterPlayers[0];
+		}
+	}
+
+	// Check for 'only get open graph info'
+	if (!options.onlyGetOpenGraphInfo) {
+		// Get title tag if og title was not provided
+		if (!ogObject.ogTitle && $('head > title').text() && $('head > title').text().length > 0) {
+			ogObject.ogTitle = $('head > title').text();
+		}
+		// Get meta description tag if og description was not provided
+		if (!ogObject.ogDescription && $('head > meta[name="description"]').attr('content') && $('head > meta[name="description"]').attr('content').length > 0) {
+			ogObject.ogDescription = $('head > meta[name="description"]').attr('content');
+		}
+	}
+
+	return ogObject;
+};
+
 /*
  * getOG - scrape that url!
  * @param string url - the url we want to scrape
  * @param function callback
  */
 exports.getOG = function (options, callback) {
-	request(options, function (err, response, body) {
-		if (err) {
-			callback(err, null);
-		} else if (response && response.statusCode && (response.statusCode.toString().substring(0, 1) === '4' || response.statusCode.toString().substring(0, 1) === '5')) {
-			callback(new Error('Error from server'), null);
-		} else {
-			if (options.encoding === null) {
-				if (charset(response.headers)) {
-					body = iconv.decode(body, charset(response.headers));
-				} else {
-					body = body.toString();
-				}
+
+	var that = this;
+
+	if (options.body) {
+		callback(null, that.processBody(options, options.body));
+	} else {
+		request(options, function (err, response, body) {
+			if (err) {
+				callback(err, null);
+			} else if (response && response.statusCode && (response.statusCode.toString().substring(0, 1) === '4' || response.statusCode.toString().substring(0, 1) === '5')) {
+				callback(new Error('Error from server'), null);
+			} else {
+				callback(null, that.processBody(options, body));
 			}
-			var $ = cheerio.load(body),
-				meta = $('meta'),
-				keys = Object.keys(meta),
-				ogObject = {};
+		});
+	}
 
-			if (options.withCharset) {
-				ogObject.charset = charset(response.headers, body);
-			}
-
-			keys.forEach(function (key) {
-				if (!(meta[key].attribs && (meta[key].attribs.property || meta[key].attribs.name))) {
-					return;
-				}
-				var property = meta[key].attribs.property || meta[key].attribs.name,
-					content = meta[key].attribs.content;
-				fieldsArray.forEach(function (item) {
-					if (property === item.property) {
-						if (!item.multiple) {
-							ogObject[item.fieldName] = content;
-						} else if (!ogObject[item.fieldName]) {
-							ogObject[item.fieldName] = [content];
-						} else if (Array.isArray(ogObject[item.fieldName])) {
-							ogObject[item.fieldName].push(content);
-						}
-					}
-				});
-			});
-
-			/* Combine image/width/height/type
-				and sort for priority */
-			var ogImages = _.zip(ogObject.ogImage,
-					ogObject.ogImageWidth,
-					ogObject.ogImageHeight,
-					ogObject.ogImageType)
-				.map(mediaMapper).sort(mediaSorter);
-
-			/* Combine video/width/height/type
-				and sort for priority */
-			var ogVideos = _.zip(ogObject.ogVideo,
-					ogObject.ogVideoWidth,
-					ogObject.ogVideoHeight,
-					ogObject.ogVideoType)
-				.map(mediaMapper).sort(mediaSorter);
-
-			/* Combine twitter image/width/height/alt
-				and sort for priority */
-			var twitterImages = _.zip(ogObject.twitterImage,
-					ogObject.twitterImageWidth,
-					ogObject.twitterImageHeight,
-					ogObject.twitterImageAlt)
-				.map(mediaMapperTwitterImage).sort(mediaSorter);
-
-			/* Combine twitter player/width/height/stream
-				and sort for priority */
-			var twitterPlayers = _.zip(ogObject.twitterPlayer,
-					ogObject.twitterPlayerWidth,
-					ogObject.twitterPlayerHeight,
-					ogObject.twitterPlayerStream)
-				.map(mediaMapperTwitterPlayer).sort(mediaSorter);
-
-			// Delete temporary fields
-			fieldsArray.filter(function (item) {
-				return item.multiple;
-			}).forEach(function (item) {
-				delete ogObject[item.fieldName];
-			});
-
-			// Select the best image
-			if (ogImages.length) {
-				if (options.allMedia) {
-					ogObject.ogImage = ogImages;
-				} else {
-					ogObject.ogImage = ogImages[0];
-				}
-			}
-
-			// Select the best video
-			if (ogVideos.length) {
-				if (options.allMedia) {
-					ogObject.ogVideo = ogVideos;
-				} else {
-					ogObject.ogVideo = ogVideos[0];
-				}
-			}
-
-			// Select the best twitter image
-			if (twitterImages.length) {
-				if (options.allMedia) {
-					ogObject.twitterImage = twitterImages;
-				} else {
-					ogObject.twitterImage = twitterImages[0];
-				}
-			}
-
-			// Select the best player
-			if (twitterPlayers.length) {
-				if (options.allMedia) {
-					ogObject.twitterPlayer = twitterPlayers;
-				} else {
-					ogObject.twitterPlayer = twitterPlayers[0];
-				}
-			}
-
-			// Check for 'only get open graph info'
-			if (!options.onlyGetOpenGraphInfo) {
-				// Get title tag if og title was not provided
-				if (!ogObject.ogTitle && $('head > title').text() && $('head > title').text().length > 0) {
-					ogObject.ogTitle = $('head > title').text();
-				}
-				// Get meta description tag if og description was not provided
-				if (!ogObject.ogDescription && $('head > meta[name="description"]').attr('content') && $('head > meta[name="description"]').attr('content').length > 0) {
-					ogObject.ogDescription = $('head > meta[name="description"]').attr('content');
-				}
-				// Get first image as og:image if there is no og:image tag.
-				if (!ogObject.ogImage) {
-					var supportedImageExts = ['jpg', 'jpeg', 'png'];
-					$('img').each(function (i, elem) {
-						if ($(elem).attr('src') && $(elem).attr('src').length > 0 && supportedImageExts.indexOf($(elem).attr('src').split('.').pop()) !== -1) {
-							ogObject.ogImage = {
-								url: $(elem).attr('src')
-							};
-							return false;
-						}
-					});
-				}
-			}
-
-			//console.log('ogObject',ogObject);
-			callback(null, ogObject, body);
-		}
-	});
 };

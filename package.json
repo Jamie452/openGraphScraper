@@ -1,5 +1,5 @@
 {
-	"name": "open-graph-scraper",
+	"name": "@jamie/open-graph-scraper",
 	"description": "Node.js scraper service for Open Graph info",
 	"version": "2.3.2",
 	"license": "MIT",
@@ -8,9 +8,9 @@
 		"node" : "6.x"
 	},
 	"author": {
-		"name" : "Josh Shemas",
-		"email" : "jshemas1@gmail.com",
-		"url" : "https://github.com/jshemas"
+		"name": "Jamie Street",
+		"email": "jamie@jamiestreet.co.uk",
+		"url": "http://jamie.st/"
 	},
 	"dependencies": {
 		"request": "2.69.0",
@@ -25,8 +25,8 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "http://github.com/jshemas/openGraphScraper.git",
-		"web" : "http://github.com/jshemas/openGraphScraper"
+		"url": "http://github.com/Jamie452/openGraphScraper.git",
+		"web" : "http://github.com/Jamie452/openGraphScraper"
 	},
 	"keywords": [
 		"open graph",
