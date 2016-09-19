@@ -98,6 +98,11 @@ var fieldsArray = [
 		fieldName: 'ogSiteName'
 	},
 	{
+		multiple: false,
+		property: 'og:brand',
+		fieldName: 'ogBrand'
+	},
+	{
 		multiple: true,
 		property: 'og:video',
 		fieldName: 'ogVideo'
@@ -126,6 +131,16 @@ var fieldsArray = [
 		multiple: true,
 		property: 'og:video:type',
 		fieldName: 'ogVideoType'
+	},
+	{
+		multiple: false,
+		property: 'product:price:amount',
+		fieldName: 'productPriceAmount'
+	},
+	{
+		multiple: false,
+		property: 'product:price:currency',
+		fieldName: 'productPriceCurrency'
 	},
 	{
 		multiple: false,
